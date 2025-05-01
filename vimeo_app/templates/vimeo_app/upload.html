@@ -1,0 +1,233 @@
+{% extends 'vimeo_app/base.html' %}
+
+{% block title %}Upload Video - Vimeo Integration{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="mb-0">Upload Video</h2>
+                </div>
+                <div class="card-body">
+                    <form id="uploadForm" method="post" enctype="multipart/form-data">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <label for="video" class="form-label">Video File</label>
+                            <input type="file" class="form-control" id="video" name="video" accept="video/*" required>
+                            <small class="text-muted">Maximum file size: 500MB</small>
+                        </div>
+                        <div class="mb-3">
+                            <label for="title" class="form-label">Title</label>
+                            <input type="text" class="form-control" id="title" name="title" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="description" class="form-label">Description</label>
+                            <textarea class="form-control" id="description" name="description" rows="3"></textarea>
+                        </div>
+                        
+                        <!-- Progress Section -->
+                        <div class="mb-3 d-none" id="progressContainer">
+                            <div class="card">
+                                <div class="card-body">
+                                    <!-- Overall Progress -->
+                                    <div class="mb-3">
+                                        <div class="d-flex justify-content-between mb-2">
+                                            <span class="text-muted">Overall Progress</span>
+                                            <span class="text-muted" id="overallProgress">0%</span>
+                                        </div>
+                                        <div class="progress" style="height: 20px;">
+                                            <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                                 role="progressbar" 
+                                                 style="width: 0%" 
+                                                 id="overallProgressBar">
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Upload Details -->
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <div class="mb-2">
+                                                <small class="text-muted">Status:</small>
+                                                <span id="uploadStatus" class="ms-2">Preparing upload...</span>
+                                            </div>
+                                            <div class="mb-2">
+                                                <small class="text-muted">File Size:</small>
+                                                <span id="fileSize" class="ms-2">0 MB</span>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="mb-2">
+                                                <small class="text-muted">Uploaded:</small>
+                                                <span id="uploadedSize" class="ms-2">0 MB</span>
+                                            </div>
+                                            <div class="mb-2">
+                                                <small class="text-muted">Upload Speed:</small>
+                                                <span id="uploadSpeed" class="ms-2">0 MB/s</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="d-flex justify-content-between">
+                            <a href="{% url 'home' %}" class="btn btn-outline-secondary">
+                                <i class="fas fa-arrow-left me-2"></i>Back to Videos
+                            </a>
+                            <div class="btn-group">
+                                <button type="submit" class="btn btn-primary" id="uploadButton">
+                                    <i class="fas fa-upload me-2"></i>Upload Video
+                                </button>
+                                <button type="button" class="btn btn-danger d-none" id="cancelButton">
+                                    <i class="fas fa-times me-2"></i>Cancel Upload
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('uploadForm');
+    const fileInput = document.getElementById('video');
+    const progressContainer = document.getElementById('progressContainer');
+    const overallProgressBar = document.getElementById('overallProgressBar');
+    const overallProgressText = document.getElementById('overallProgress');
+    const uploadStatus = document.getElementById('uploadStatus');
+    const fileSize = document.getElementById('fileSize');
+    const uploadedSize = document.getElementById('uploadedSize');
+    const uploadSpeed = document.getElementById('uploadSpeed');
+    const uploadButton = document.getElementById('uploadButton');
+    const cancelButton = document.getElementById('cancelButton');
+    let xhr = null;
+    let startTime;
+    let lastUploadedSize = 0;
+
+    function formatBytes(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    function calculateSpeed(loaded) {
+        const currentTime = Date.now();
+        const timeElapsed = (currentTime - startTime) / 1000; // Convert to seconds
+        const bytesPerSecond = (loaded - lastUploadedSize) / timeElapsed;
+        lastUploadedSize = loaded;
+        startTime = currentTime;
+        return formatBytes(bytesPerSecond) + '/s';
+    }
+
+    // Update file size when a file is selected
+    fileInput.addEventListener('change', function() {
+        const file = this.files[0];
+        if (file) {
+            fileSize.textContent = formatBytes(file.size);
+        }
+    });
+
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const file = fileInput.files[0];
+        if (!file) {
+            alert('Please select a video file');
+            return;
+        }
+
+        // Check file size (500MB limit)
+        if (file.size > 500 * 1024 * 1024) {
+            alert('File size exceeds 500MB limit');
+            return;
+        }
+
+        const formData = new FormData(form);
+        xhr = new XMLHttpRequest();
+        startTime = Date.now();
+        lastUploadedSize = 0;
+        
+        // Show progress container and update UI
+        progressContainer.classList.remove('d-none');
+        uploadButton.classList.add('d-none');
+        cancelButton.classList.remove('d-none');
+        uploadStatus.textContent = 'Starting upload...';
+
+        // Set longer timeout for large files
+        xhr.timeout = 3600000; // 1 hour timeout
+
+        xhr.upload.addEventListener('progress', function(e) {
+            if (e.lengthComputable) {
+                const percentComplete = Math.round((e.loaded / e.total) * 100);
+                overallProgressBar.style.width = percentComplete + '%';
+                overallProgressText.textContent = percentComplete + '%';
+                uploadedSize.textContent = formatBytes(e.loaded);
+                uploadSpeed.textContent = calculateSpeed(e.loaded);
+                
+                if (percentComplete < 100) {
+                    uploadStatus.textContent = 'Uploading... This may take several minutes for large files.';
+                }
+            }
+        });
+
+        // Add timeout handler
+        xhr.addEventListener('timeout', function() {
+            uploadStatus.textContent = 'Upload timed out. Please try again.';
+            overallProgressBar.classList.add('bg-danger');
+            uploadButton.classList.remove('d-none');
+            cancelButton.classList.add('d-none');
+        });
+
+        xhr.addEventListener('load', function() {
+            if (xhr.status === 200) {
+                try {
+                    const response = JSON.parse(xhr.responseText);
+                    if (response.status === 'complete') {
+                        overallProgressBar.classList.remove('progress-bar-striped', 'progress-bar-animated');
+                        overallProgressBar.classList.add('bg-success');
+                        uploadStatus.textContent = 'Upload complete! Processing video...';
+                        setTimeout(() => window.location.href = "{% url 'home' %}", 2000);
+                    }
+                } catch (e) {
+                    console.error('Error parsing response:', e);
+                }
+            } else {
+                uploadStatus.textContent = 'Upload failed. Please try again.';
+                overallProgressBar.classList.add('bg-danger');
+                uploadButton.classList.remove('d-none');
+                cancelButton.classList.add('d-none');
+            }
+        });
+
+        xhr.addEventListener('error', function() {
+            uploadStatus.textContent = 'Upload failed. Please try again.';
+            overallProgressBar.classList.add('bg-danger');
+            uploadButton.classList.remove('d-none');
+            cancelButton.classList.add('d-none');
+        });
+
+        cancelButton.addEventListener('click', function() {
+            if (xhr) {
+                xhr.abort();
+                uploadStatus.textContent = 'Upload cancelled';
+                overallProgressBar.classList.add('bg-warning');
+                uploadButton.classList.remove('d-none');
+                cancelButton.classList.add('d-none');
+            }
+        });
+
+        xhr.open('POST', form.action);
+        xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+        xhr.send(formData);
+    });
+});
+</script>
+{% endblock %} 
